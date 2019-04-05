@@ -3,7 +3,6 @@
 
 /* some logic in the fault handler requires compiling without optimizations */
 
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -23,6 +22,7 @@
 #include <sched.h>
 #include <pthread.h>
 #include <sys/wait.h>
+#include <stdarg.h>
 
 /* configuration */
 
@@ -57,9 +57,10 @@ struct {
 	.nx_support=true,
 };
 
-/* capstone */
+//NOTE: only one of USE_CAPSTONE or USE_XED should be defined at a time. I now define them in the Makefile with conditional -D arguments to gcc so have removed both definitions from this file
+//for XED you also need to pass in the MICROARCH as a GCC definition or hard-code it here (see https://intelxed.github.io/ref-manual/xed-chip-enum_8h_source.html for all possible options) 
 
-#define USE_CAPSTONE true /* sifter offloads some capstone work to injector */
+/* capstone */
 
 #if USE_CAPSTONE
 	#include <capstone/capstone.h>
@@ -68,11 +69,21 @@ struct {
 	#else
 		#define CS_MODE CS_MODE_32
 	#endif
+	csh capstone_handle;
+	cs_insn *capstone_insn;
 #endif
 
-#if USE_CAPSTONE
-csh capstone_handle;
-cs_insn *capstone_insn;
+#if USE_XED
+	#if __x86_64__
+		#define XED_MODE XED_MACHINE_MODE_LONG_64
+		#define XED_WIDTH XED_ADDRESS_WIDTH_64b
+	#else
+		#define XED_MODE XED_MACHINE_MODE_LEGACY_32
+		#define XED_WIDTH XED_ADDRESS_WIDTH_32b
+	#endif
+	xed_chip_features_t features;
+	xed_error_enum_t xerr = XED_ERROR_NONE;
+	xed_decoded_inst_t xedd;
 #endif
 
 /* 32 vs 64 */
@@ -318,8 +329,8 @@ typedef struct { insn_t start; insn_t end; bool started; } range_t;
 insn_t* range_marker=NULL;
 range_t search_range={};
 range_t total_range={
-	.start={.bytes={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, .len=0},
-	.end={.bytes={0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff}, .len=0},
+	.start={.bytes={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, .len=0},
+	.end={.bytes={0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff}, .len=0},
 	.started=false
 };
 
@@ -344,7 +355,7 @@ int stderr_sync_counter=0;
 
 /* functions */
 
-#if USE_CAPSTONE
+#if USE_CAPSTONE || USE_XED
 int print_asm(FILE* f);
 #endif
 void print_mc(FILE*, int);
@@ -576,6 +587,33 @@ int print_asm(FILE* f)
 				);
 		}
 		expected_length=(int)(address-(uintptr_t)packet_buffer);
+	}
+
+	return 0;
+}
+#endif
+
+
+#if USE_XED
+int print_asm(FILE* f)
+{
+	if (output==TEXT) {
+		uint8_t* code=inj.i.bytes;
+		size_t code_size=MAX_INSN_LENGTH;
+		int expected_length = 0;		//Capstone updates address var by length of instruction whereas XED doesn't take an address var (hence address - packet_buffer code removed as it's just to get expected instr length)
+		char disasmString[40];
+		xed_uint64_t address=(uintptr_t)packet_buffer;
+		
+		//must reinitialize inst on each decode attempt in order for decode to work 
+		xed_decoded_inst_zero(&xedd);
+		xed_decoded_inst_set_mode(&xedd, XED_MODE, XED_WIDTH);
+		
+		if(xed_decode_with_features(&xedd, XED_STATIC_CAST(const xed_uint8_t*,code), code_size, &features) == XED_ERROR_NONE){
+			expected_length = (int)xed_decoded_inst_get_length(&xedd);
+			if(xed_format_context(XED_SYNTAX_INTEL, &xedd, disasmString, 40, address, 0, 0)) sync_fprintf(f, "%10s %-45s (%2d)", disasmString, "", expected_length);
+			else sync_fprintf(f, "%10s %-45s (%2d)", xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), "unknown-operands", expected_length);
+		}
+		else sync_fprintf(f,	"%10s %-45s (%2d)", "(unk)", " ", expected_length);
 	}
 
 	return 0;
@@ -1173,6 +1211,55 @@ void give_result(FILE* f)
 			sync_fwrite(&disas, sizeof(disas), 1, stdout);
 #endif
 #endif
+
+#if USE_XED
+			code=inj.i.bytes;
+			code_size=MAX_INSN_LENGTH;
+			int expected_length = 0;	//Capstone updates address var by length of instruction whereas XED doesn't take an address var (hence address - packet_buffer code removed as it's just to get expected instr length)	
+			char disasmString[40];
+			xed_uint64_t address=(uintptr_t)packet_buffer;
+
+			//must reinitialize inst on each decode attempt in order for decode to work 
+			xed_decoded_inst_zero(&xedd);
+			xed_decoded_inst_set_mode(&xedd, XED_MODE, XED_WIDTH);
+		
+			if(xed_decode_with_features(&xedd, XED_STATIC_CAST(const xed_uint8_t*,code), code_size, &features) == XED_ERROR_NONE){
+				expected_length = (int)xed_decoded_inst_get_length(&xedd);
+				if(xed_format_context(XED_SYNTAX_INTEL, &xedd, disasmString, 40, address, 0, 0)) sync_fprintf(f, "%10s %-45s (%2d)", disasmString, "", expected_length);
+				else sync_fprintf(f, "%10s %-45s (%2d)", xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), "unknown-operands", expected_length);
+				#if RAW_REPORT_DISAS_MNE 
+				strncpy(disas.mne, xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), RAW_DISAS_MNEMONIC_BYTES);
+				#endif
+				#if RAW_REPORT_DISAS_OPS
+				strncpy(disas.ops, " ", RAW_DISAS_OP_BYTES);
+				#endif
+				#if RAW_REPORT_DISAS_LEN
+				disas.len=expected_length;
+				#endif
+				#if RAW_REPORT_DISAS_VAL
+				disas.val=true;
+				#endif
+			}
+			else {
+				sync_fprintf(f,	"%10s %-45s (%2d)", "(unk)", " ", (int)(address-(uintptr_t)packet_buffer));
+				#if RAW_REPORT_DISAS_MNE 
+				strncpy(disas.mne, "(unk)", RAW_DISAS_MNEMONIC_BYTES);
+				#endif
+				#if RAW_REPORT_DISAS_OPS
+				strncpy(disas.ops, " ", RAW_DISAS_OP_BYTES);
+				#endif
+				#if RAW_REPORT_DISAS_LEN
+				disas.len=(int)(address-(uintptr_t)packet_buffer);
+				#endif
+				#if RAW_REPORT_DISAS_VAL
+				disas.val=false;
+				#endif
+			}
+		
+			#if RAW_REPORT_DISAS_MNE || RAW_REPORT_DISAS_OPS || RAW_REPORT_DISAS_LEN
+			sync_fwrite(&disas, sizeof(disas), 1, stdout);
+			#endif
+#endif
 			sync_fwrite(inj.i.bytes, RAW_REPORT_INSN_BYTES, 1, stdout);
 			sync_fwrite(&result, sizeof(result), 1, stdout);
 			/* fflush(stdout); */
@@ -1357,7 +1444,7 @@ void tick(void)
 			sync_fprintf(stderr, "t: ");
 			print_mc(stderr, 8);
 			sync_fprintf(stderr, "... ");
-			#if USE_CAPSTONE
+			#if USE_CAPSTONE || USE_XED
 			print_asm(stderr);
 			sync_fprintf(stderr, "\t");
 			#endif
@@ -1374,7 +1461,7 @@ void pretext(void)
 		sync_fprintf(stdout, "r: ");
 		print_mc(stdout, 8);
 		sync_fprintf(stdout, "... ");
-		#if USE_CAPSTONE
+		#if USE_CAPSTONE || USE_XED
 		print_asm(stdout);
 		sync_fprintf(stdout, " ");
 		#endif
@@ -1433,6 +1520,11 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 	capstone_insn = cs_malloc(capstone_handle);
+#endif
+
+#if USE_XED
+  	xed_tables_init();						     //essential initialization for XED to work
+  	xed_get_chip_features(&features, MICROARCH);
 #endif
 
 	if (config.enable_null_access) {

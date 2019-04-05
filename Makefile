@@ -1,41 +1,30 @@
 # sand sifter make file
-#
-# in x86, instructions run in 32 bit mode sometimes differ from the same
-# instructions run in 64 bit mode.  for this reason, it can be beneficial to
-# fuzz both 32 and 64 bit instructions.  this requires a 32 and 64 bit binary.
-# afaict, capstone will not let you simultaneously install both 32 and 64 bit
-# versions.  to overcome this, we statically link to capstone.  to build both a
-# 32 bit and 64 bit injector:
-#
-# - build and install 32 bit capstone:
-#   ./make.sh nix32
-#   sudo ./make.sh nix32 install
-#
-# - build the 32 bit injector:
-#   make CFLAGS=-m32
-#   mv injector injector_32
-#
-# - build and install 64 bit capstone:
-#   ./make.sh
-#   sudo ./make.sh install
-#
-# - build the 64 bit injector:
-#   make injector
-#   mv injector injector_64
-#
-# you can now copy injector_32 and injector_64 to 'injector' before running
-# ./sifter.py in order to explore that facet of the architecture.
-#
-#TODO: i don't know if i was ever able to get a statically linked capstone to
-# work like i describe above
+# modified by CE to use Intel XED disassembler instead of Capstone (many false positive "undocumented" instructions with Capstone)
 
-all: injector
 
-injector: injector.o
-	$(CC) $(CFLAGS) $< -O3 -Wall -l:libcapstone.a -o $@ -pthread
+# TODO: CONFIGURE ME! Change these for your system / preferences
+# ==============================================================
+kitLocation = xed/kits/yourkitnamehere	 # change this for your system after installing XED (follow instructions at https://github.com/intelxed/xed/ to install a kit)
+microarch = XED_CHIP_ALL		 # see https://intelxed.github.io/ref-manual/xed-chip-enum_8h_source.html for all possible microarchitecture names or use XED_CHIP_ALL if unsure
+useXed = false
+useCapstone = true
+#===============================================================
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@ -Wall
+
+ifeq ($(useXed), true)
+all: clean xed
+else 
+all : clean capstone
+endif
+
+xed:
+	# Building injector with Intel XED disassembler (differs from original Sandsifter)
+	gcc -D_GNU_SOURCE -DUSE_XED -DMICROARCH=$(microarch) -include$(kitLocation)/include/xed/xed-interface.h -c injector.c
+	gcc -Wall -static -no-pie -o injector injector.o $(kitLocation)/lib/libxed.a -pthread
+
+capstone:
+	# Building injector with original Capstone disassembler
+	gcc -D_GNU_SOURCE -DUSE_CAPSTONE -Wall -static -no-pie -o injector injector.c -l:libcapstone.a -pthread
 
 clean:
-	rm *.o injector
+	rm -f *.o injector
