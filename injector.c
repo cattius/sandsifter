@@ -81,6 +81,7 @@ struct {
 		#define XED_MODE XED_MACHINE_MODE_LEGACY_32
 		#define XED_WIDTH XED_ADDRESS_WIDTH_32b
 	#endif
+	#define XED_SYNTAX XED_SYNTAX_INTEL
 	xed_chip_features_t features;
 	xed_error_enum_t xerr = XED_ERROR_NONE;
 	xed_decoded_inst_t xedd;
@@ -220,9 +221,9 @@ output_t output=TEXT;
 
 #define RAW_REPORT_INSN_BYTES 16
 
-#define RAW_REPORT_DISAS_MNE false /* sifter assumes false */
+#define RAW_REPORT_DISAS_MNE true /* sifter assumes false */
 #define RAW_REPORT_DISAS_MNE_BYTES 16
-#define RAW_REPORT_DISAS_OPS false /* sifter assumes false */
+#define RAW_REPORT_DISAS_OPS true /* sifter assumes false */
 #define RAW_REPORT_DISAS_OPS_BYTES 32
 #define RAW_REPORT_DISAS_LEN true  /* sifter assumes true */
 #define RAW_REPORT_DISAS_VAL true  /* sifter assumes true */
@@ -610,8 +611,8 @@ int print_asm(FILE* f)
 		
 		if(xed_decode_with_features(&xedd, XED_STATIC_CAST(const xed_uint8_t*,code), code_size, &features) == XED_ERROR_NONE){
 			expected_length = (int)xed_decoded_inst_get_length(&xedd);
-			if(xed_format_context(XED_SYNTAX_INTEL, &xedd, disasmString, 40, address, 0, 0)) sync_fprintf(f, "%10s %-45s (%2d)", disasmString, "", expected_length);
-			else sync_fprintf(f, "%10s %-45s (%2d)", xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), "unknown-operands", expected_length);
+			if(xed_format_context(XED_SYNTAX, &xedd, disasmString, 40, address, 0, 0)) sync_fprintf(f, "%10s %-45s (%2d)", disasmString, "", expected_length);
+			else sync_fprintf(f, "%10s %-45s (%2d)", xed_iclass_enum_t2str(xed_decoded_inst_get_iclass(&xedd)), " ", expected_length);
 		}
 		else sync_fprintf(f,	"%10s %-45s (%2d)", "(unk)", " ", expected_length);
 	}
@@ -1181,10 +1182,10 @@ void give_result(FILE* f)
 					capstone_insn)
 				) {
 #if RAW_REPORT_DISAS_MNE 
-				strncpy(disas.mne, capstone_insn[0].mnemonic, RAW_DISAS_MNEMONIC_BYTES);
+				strncpy(disas.mne, capstone_insn[0].mnemonic, RAW_REPORT_DISAS_MNE_BYTES);
 #endif
 #if RAW_REPORT_DISAS_OPS
-				strncpy(disas.ops, capstone_insn[0].op_str, RAW_DISAS_OP_BYTES);
+				strncpy(disas.ops, capstone_insn[0].op_str, RAW_REPORT_DISAS_OPS_BYTES);
 #endif
 #if RAW_REPORT_DISAS_LEN
 				disas.len=(int)(address-(uintptr_t)packet_buffer);
@@ -1195,10 +1196,10 @@ void give_result(FILE* f)
 			}
 			else {
 #if RAW_REPORT_DISAS_MNE 
-				strncpy(disas.mne, "(unk)", RAW_DISAS_MNEMONIC_BYTES);
+				strncpy(disas.mne, "(unk)", RAW_REPORT_DISAS_MNE_BYTES);
 #endif
 #if RAW_REPORT_DISAS_OPS
-				strncpy(disas.ops, " ", RAW_DISAS_OP_BYTES);
+				strncpy(disas.ops, " ", RAW_REPORT_DISAS_OPS_BYTES);
 #endif
 #if RAW_REPORT_DISAS_LEN
 				disas.len=(int)(address-(uintptr_t)packet_buffer);
@@ -1222,43 +1223,44 @@ void give_result(FILE* f)
 			//must reinitialize inst on each decode attempt in order for decode to work 
 			xed_decoded_inst_zero(&xedd);
 			xed_decoded_inst_set_mode(&xedd, XED_MODE, XED_WIDTH);
-		
-			if(xed_decode_with_features(&xedd, XED_STATIC_CAST(const xed_uint8_t*,code), code_size, &features) == XED_ERROR_NONE){
-				expected_length = (int)xed_decoded_inst_get_length(&xedd);
-				if(xed_format_context(XED_SYNTAX_INTEL, &xedd, disasmString, 40, address, 0, 0)) sync_fprintf(f, "%10s %-45s (%2d)", disasmString, "", expected_length);
-				else sync_fprintf(f, "%10s %-45s (%2d)", xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), "unknown-operands", expected_length);
-				#if RAW_REPORT_DISAS_MNE 
-				strncpy(disas.mne, xed_iform_enum_t2str(xed_decoded_inst_get_iform_enum (&xedd)), RAW_DISAS_MNEMONIC_BYTES);
-				#endif
-				#if RAW_REPORT_DISAS_OPS
-				strncpy(disas.ops, " ", RAW_DISAS_OP_BYTES);
-				#endif
-				#if RAW_REPORT_DISAS_LEN
-				disas.len=expected_length;
-				#endif
-				#if RAW_REPORT_DISAS_VAL
+
+			if (xed_decode_with_features(&xedd, XED_STATIC_CAST(const xed_uint8_t*,code), code_size, &features) == XED_ERROR_NONE) {
+#if RAW_REPORT_DISAS_MNE 
+				//Note: has not been tested as sifter assumes false
+				strncpy(disas.mne, xed_iclass_enum_t2str(xed_decoded_inst_get_iclass(&xedd)), RAW_REPORT_DISAS_MNE_BYTES);
+#endif
+#if RAW_REPORT_DISAS_OPS
+				//Note: has not been tested as sifter assumes false
+				if(xed_format_context(XED_SYNTAX, &xedd, disasmString, 40, address, 0, 0)){
+					strtok(disasmString," ");
+					strncpy(disas.ops, strtok(NULL," "), RAW_REPORT_DISAS_OPS_BYTES);
+				}
+				else strncpy(disas.ops, " ", RAW_REPORT_DISAS_OPS_BYTES);
+#endif
+#if RAW_REPORT_DISAS_LEN
+				disas.len=(int)xed_decoded_inst_get_length(&xedd);
+#endif
+#if RAW_REPORT_DISAS_VAL
 				disas.val=true;
-				#endif
+#endif
 			}
 			else {
-				sync_fprintf(f,	"%10s %-45s (%2d)", "(unk)", " ", (int)(address-(uintptr_t)packet_buffer));
-				#if RAW_REPORT_DISAS_MNE 
-				strncpy(disas.mne, "(unk)", RAW_DISAS_MNEMONIC_BYTES);
-				#endif
-				#if RAW_REPORT_DISAS_OPS
-				strncpy(disas.ops, " ", RAW_DISAS_OP_BYTES);
-				#endif
-				#if RAW_REPORT_DISAS_LEN
+#if RAW_REPORT_DISAS_MNE 
+				strncpy(disas.mne, "(unk)", RAW_REPORT_DISAS_MNE_BYTES);
+#endif
+#if RAW_REPORT_DISAS_OPS
+				strncpy(disas.ops, " ", RAW_REPORT_DISAS_OPS_BYTES);
+#endif
+#if RAW_REPORT_DISAS_LEN
 				disas.len=(int)(address-(uintptr_t)packet_buffer);
-				#endif
-				#if RAW_REPORT_DISAS_VAL
+#endif
+#if RAW_REPORT_DISAS_VAL
 				disas.val=false;
-				#endif
+#endif
 			}
-		
-			#if RAW_REPORT_DISAS_MNE || RAW_REPORT_DISAS_OPS || RAW_REPORT_DISAS_LEN
+#if RAW_REPORT_DISAS_MNE || RAW_REPORT_DISAS_OPS || RAW_REPORT_DISAS_LEN
 			sync_fwrite(&disas, sizeof(disas), 1, stdout);
-			#endif
+#endif
 #endif
 			sync_fwrite(inj.i.bytes, RAW_REPORT_INSN_BYTES, 1, stdout);
 			sync_fwrite(&result, sizeof(result), 1, stdout);

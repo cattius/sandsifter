@@ -4,10 +4,9 @@
 
 # TODO: CONFIGURE ME! Change these for your system / preferences
 # ==============================================================
-kitLocation = xed/kits/yourkitnamehere	 # change this for your system after installing XED (follow instructions at https://github.com/intelxed/xed/ to install a kit)
-microarch = XED_CHIP_ALL		 # see https://intelxed.github.io/ref-manual/xed-chip-enum_8h_source.html for all possible microarchitecture names or use XED_CHIP_ALL if unsure
-useXed = false
-useCapstone = true
+kitLocation = xed/kits/yourkitnamehere# change this for your system after installing XED (follow instructions at https://github.com/intelxed/xed/ to install a kit)
+microarch = XED_CHIP_ALL# see https://intelxed.github.io/ref-manual/xed-chip-enum_8h_source.html for all possible microarchitecture names or use XED_CHIP_ALL if unsure
+useXed = true
 #===============================================================
 
 
